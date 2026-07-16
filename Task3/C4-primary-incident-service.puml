@@ -1,0 +1,124 @@
+@startuml C4_Primary_Incident_Service
+!pragma layout smetana
+title C4 — Вариант A: ключевые классы сервиса инцидентов
+
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+hide empty fields
+
+package "IncidentService.Api" {
+    class DetectionEventConsumer <<inbound adapter>> {
+        +consume(message: DetectionMessage): void
+    }
+    class IncidentController <<inbound adapter>> {
+        +list(query: IncidentQuery): Response
+        +acknowledge(id: IncidentId, key: IdempotencyKey): Response
+        +close(id: IncidentId): Response
+    }
+    class DetectionMessage <<DTO>> {
+        +eventId: UUID
+        +farmId: UUID
+        +cameraId: UUID
+        +type: DetectionType
+        +confidence: float
+        +occurredAt: DateTime
+        +modelVersion: string
+    }
+}
+
+package "IncidentService.Application" {
+    class RegisterDetectionHandler <<use case>> {
+        +handle(command: RegisterDetection): void
+    }
+    class AcknowledgeIncidentHandler <<use case>> {
+        +handle(command: AcknowledgeIncident): void
+    }
+    class CloseIncidentHandler <<use case>> {
+        +handle(command: CloseIncident): void
+    }
+    class TransactionManager <<port>> {
+        +transactional(operation): void
+    }
+}
+
+package "IncidentService.Domain" {
+    class Incident <<aggregate root>> {
+        -id: IncidentId
+        -farmId: FarmId
+        -type: IncidentType
+        -severity: Severity
+        -status: IncidentStatus
+        -version: int
+        +open(detection, decision): Incident
+        +merge(detection): void
+        +acknowledge(operatorId, at): void
+        +close(operatorId, at): void
+        +releaseEvents(): DomainEvent[]
+    }
+    class IncidentRules <<domain service>> {
+        +evaluate(detection, activeIncident): RuleDecision
+    }
+    class NotificationPolicy <<domain service>> {
+        +plan(incident): NotificationPlan
+    }
+    interface IncidentRepository <<port>> {
+        +findActive(farmId, cameraId, type): Incident?
+        +get(id: IncidentId): Incident
+        +save(incident: Incident): void
+    }
+    interface InboxRepository <<port>> {
+        +registerOnce(eventId: UUID): bool
+    }
+    interface OutboxRepository <<port>> {
+        +append(events: DomainEvent[]): void
+        +pending(limit: int): OutboxMessage[]
+        +markPublished(id: UUID): void
+    }
+    class IncidentOpened <<domain event>>
+    class IncidentAcknowledged <<domain event>>
+    class NotificationRequested <<domain event>>
+}
+
+package "IncidentService.Infrastructure" {
+    class PostgresIncidentRepository <<adapter>>
+    class PostgresInboxRepository <<adapter>>
+    class PostgresOutboxRepository <<adapter>>
+    class RabbitOutboxRelay <<outbound adapter>> {
+        +publishBatch(): void
+    }
+}
+
+DetectionEventConsumer --> DetectionMessage
+DetectionEventConsumer --> RegisterDetectionHandler
+IncidentController --> AcknowledgeIncidentHandler
+IncidentController --> CloseIncidentHandler
+RegisterDetectionHandler --> IncidentRules
+RegisterDetectionHandler --> NotificationPolicy
+RegisterDetectionHandler --> IncidentRepository
+RegisterDetectionHandler --> InboxRepository
+RegisterDetectionHandler --> OutboxRepository
+RegisterDetectionHandler --> TransactionManager
+AcknowledgeIncidentHandler --> IncidentRepository
+AcknowledgeIncidentHandler --> OutboxRepository
+CloseIncidentHandler --> IncidentRepository
+CloseIncidentHandler --> OutboxRepository
+Incident *-- IncidentOpened
+Incident *-- IncidentAcknowledged
+NotificationPolicy --> NotificationRequested
+PostgresIncidentRepository ..|> IncidentRepository
+PostgresInboxRepository ..|> InboxRepository
+PostgresOutboxRepository ..|> OutboxRepository
+RabbitOutboxRelay --> OutboxRepository
+
+note right of RegisterDetectionHandler
+  Inbox, изменение Incident и Outbox
+  выполняются в одной транзакции.
+end note
+
+note right of RabbitOutboxRelay
+  Доставка at-least-once.
+  eventId обеспечивает идемпотентность.
+end note
+@enduml
+
+

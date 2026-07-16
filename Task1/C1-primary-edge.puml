@@ -1,0 +1,38 @@
+@startuml C1_Primary_Edge
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+title C1 — Основное решение: автономный агент на сервере фермы
+LAYOUT_TOP_DOWN()
+
+Person(operator, "Оператор фермы", "Контролирует инциденты и оборудование")
+Person(duty, "Дежурный сотрудник", "Получает локальные оповещения")
+Person(admin, "Администратор / аналитик", "Управляет фермами, ролями, метриками и отчётами")
+
+System_Boundary(mvp, "MVP мониторинга животноводства — новые системы") {
+    System(edge, "Агент фермы", "На центральном сервере фермы автономно анализирует видео, выявляет инциденты, управляет оборудованием, хранит данные и синхронизируется с центром")
+    System(central, "Центральная платформа мониторинга", "Управляет фермами и конфигурацией, принимает события и метрики, предоставляет REST API")
+}
+
+System_Ext(devices, "Камеры и IoT-оборудование", "Камеры, кормушки, поилки, датчики фильтрации и запасов разных производителей")
+System_Ext(local_notify, "Локальные каналы оповещения", "Сирена, табло, локальная GSM/SMS-связь")
+System_Ext(idp, "Сервис идентификации", "OIDC/OAuth 2.1, MFA и роли")
+
+Enterprise_Boundary(existing, "Существующий ландшафт «АгроТех Х»") {
+    System_Ext(existing_ui, "Веб-портал и мобильное приложение", "Используют API новой платформы")
+    System_Ext(kafka, "Корпоративная Kafka", "Существующая событийная шина")
+    System_Ext(analytics, "DWH / Data Lake / BI", "ClickHouse, MinIO, Power BI и аналитический модуль")
+}
+
+Rel(operator, edge, "Работает локально", "HTTPS/LAN")
+Rel(duty, local_notify, "Получает тревогу")
+Rel(admin, existing_ui, "Работает", "HTTPS")
+Rel(existing_ui, central, "Использует API", "REST/HTTPS")
+Rel(devices, edge, "Передают видео/телеметрию; получают команды", "RTSP, ONVIF, MQTT, Modbus/адаптеры")
+Rel(edge, local_notify, "Отправляет критичные уведомления", "LAN/GSM")
+BiRel(edge, central, "Синхронизирует события, метрики, команды и конфигурацию", "AMQP over mTLS; при исправной связи ≤ 10 мин")
+Rel(central, idp, "Аутентифицирует пользователей и получает роли", "OIDC/OAuth 2.1")
+Rel(central, kafka, "Публикует доменные события и метрики", "Kafka Protocol")
+Rel(kafka, analytics, "Доставляет данные для аналитики")
+
+SHOW_LEGEND()
+@enduml

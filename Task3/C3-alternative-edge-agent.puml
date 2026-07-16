@@ -1,0 +1,58 @@
+@startuml C3_Alternative_Edge_Agent
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title C3 — Вариант B: компоненты модульного edge-агента
+LAYOUT_TOP_DOWN()
+
+Person(operator, "Оператор фермы", "Реагирует на инциденты и управляет оборудованием")
+
+Container_Boundary(edge_agent, "Модульный edge-агент") {
+    Component(local_web, "Local Web API & UI", "Inbound adapter", "Локальное рабочее место и REST API")
+    Component(message_adapter, "RabbitMQ Adapter", "Inbound/outbound adapter", "Принимает результаты распознавания и телеметрию, публикует команды устройствам")
+    Component(incident_module, "Incident Management Module", "Domain + application module", "Правила, агрегат Incident, подтверждение и эскалация")
+    Component(device_module, "Device Control Module", "Domain + application module", "Единая модель команд и адаптеров производителей")
+    Component(resource_module, "Feed & Water Module", "Domain + application module", "Фильтрация воды, остатки и прогноз расхода")
+    Component(metric_module, "Metrics Module", "Domain + application module", "Базовые и пользовательские метрики")
+    Component(notification_module, "Notification Module", "Domain + application module", "Локальные каналы и политика эскалации")
+    Component(sync_module, "Synchronization Module", "Application module", "В той же транзакции сохраняет задачи локальной доставки и интеграционные события в Outbox; принимает Inbox и конфигурацию")
+    Component(module_bus, "In-process Event Bus", "Application component", "После commit передаёт некритичные локальные события, например для метрик")
+    Component(persistence, "Persistence Adapters", "Infrastructure component", "Отдельные схемы/репозитории модулей и единый Unit of Work")
+}
+
+Container_Ext(video_worker, "Сервис видеоаналитики с GPU", "Python/GPU", "Публикует результаты инференса")
+Container_Ext(edge_mq, "Локальный RabbitMQ", "AMQP/MQTT", "Результаты распознавания, телеметрия и команды")
+ContainerDb_Ext(edge_db, "Локальная БД", "PostgreSQL + TimescaleDB", "Схемы модулей, Inbox и Outbox")
+System_Ext(iot, "Кормушки, поилки и датчики", "Устройства разных производителей")
+System_Ext(local_channel, "Локальные каналы", "Сирена, табло, GSM/SMS")
+ContainerQueue_Ext(central_mq, "Центральный RabbitMQ", "RabbitMQ", "События, статусы и команды")
+
+Rel(operator, local_web, "Работает", "HTTPS/LAN")
+Rel(video_worker, edge_mq, "DetectionReceived", "AMQP")
+Rel(iot, edge_mq, "Телеметрия/статусы", "MQTT")
+Rel(edge_mq, message_adapter, "Доставляет сообщения", "AMQP/MQTT")
+Rel(message_adapter, incident_module, "Передаёт detection")
+Rel(message_adapter, device_module, "Передаёт телеметрию")
+Rel(message_adapter, resource_module, "Передаёт показатели ресурсов")
+Rel(local_web, incident_module, "Читает/подтверждает инциденты", "In-process API")
+Rel(local_web, device_module, "Создаёт команды", "In-process API")
+Rel(incident_module, module_bus, "IncidentOpened/Acknowledged")
+Rel(device_module, module_bus, "DeviceFaulted/CommandCompleted")
+Rel(resource_module, module_bus, "FeedStockLow/WaterQualityViolated")
+Rel(module_bus, metric_module, "События для метрик")
+Rel(incident_module, sync_module, "Добавляет уведомления и интеграционные события в Outbox в общей транзакции")
+Rel(device_module, sync_module, "Добавляет интеграционные события в Outbox в общей транзакции")
+Rel(resource_module, sync_module, "Добавляет интеграционные события в Outbox в общей транзакции")
+Rel(sync_module, notification_module, "Доставляет сохранённые задачи локального оповещения с повторами")
+Rel(notification_module, local_channel, "Оповещает", "LAN/GSM")
+Rel(device_module, message_adapter, "Публикует команды")
+Rel(message_adapter, edge_mq, "Команды устройствам", "AMQP/MQTT")
+Rel(incident_module, persistence, "Репозитории/Unit of Work")
+Rel(device_module, persistence, "Репозитории/Unit of Work")
+Rel(resource_module, persistence, "Репозитории/Unit of Work")
+Rel(metric_module, persistence, "Репозитории/Unit of Work")
+Rel(sync_module, persistence, "Транзакционный Outbox/Inbox")
+Rel(persistence, edge_db, "SQL")
+Rel(sync_module, central_mq, "Store-and-forward", "AMQP over mTLS")
+
+SHOW_LEGEND()
+@enduml
