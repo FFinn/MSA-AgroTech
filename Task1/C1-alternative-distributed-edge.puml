@@ -1,0 +1,42 @@
+@startuml C1_Alternative_Distributed_Edge
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+title C1 — Альтернатива: видеоаналитика на распределённых edge-узлах
+LAYOUT_TOP_DOWN()
+
+Person(operator, "Оператор фермы", "Контролирует инциденты и оборудование")
+Person(duty, "Дежурный сотрудник", "Получает локальные оповещения")
+Person(admin, "Администратор / аналитик", "Управляет фермами, ролями, метриками и отчётами")
+
+System_Boundary(mvp, "MVP мониторинга животноводства — новые системы") {
+    System(edge_nodes, "Edge-узлы видеоаналитики", "Рядом с камерами выполняют инференс и передают на сервер фермы только результаты распознавания и выбранные видеофрагменты")
+    System(coordinator, "Координатор фермы", "На центральном сервере фермы агрегирует результаты распознавания, ведёт инциденты, управляет оборудованием, оповещает и синхронизируется с центром")
+    System(central, "Центральная платформа мониторинга", "Управляет фермами и конфигурацией, принимает события и метрики, предоставляет REST API")
+}
+
+System_Ext(cameras, "Камеры", "Камеры разных производителей, включая ночной режим")
+System_Ext(iot, "IoT-оборудование", "Кормушки, поилки, датчики фильтрации и запасов")
+System_Ext(local_notify, "Локальные каналы оповещения", "Сирена, табло, локальная GSM/SMS-связь")
+System_Ext(idp, "Сервис идентификации", "OIDC/OAuth 2.1, MFA и роли")
+
+Enterprise_Boundary(existing, "Существующий ландшафт «АгроТех Х»") {
+    System_Ext(existing_ui, "Веб-портал и мобильное приложение", "Используют API новой платформы")
+    System_Ext(kafka, "Корпоративная Kafka", "Существующая событийная шина")
+    System_Ext(analytics, "DWH / Data Lake / BI", "ClickHouse, MinIO, Power BI и аналитический модуль")
+}
+
+Rel(operator, coordinator, "Работает локально", "HTTPS/LAN")
+Rel(duty, local_notify, "Получает тревогу")
+Rel(admin, existing_ui, "Работает", "HTTPS")
+Rel(existing_ui, central, "Использует API", "REST/HTTPS")
+Rel(cameras, edge_nodes, "Передают видеопотоки", "RTSP/ONVIF")
+Rel(edge_nodes, coordinator, "Передают результаты распознавания, состояние и видеофрагменты", "AMQP/S3 API over LAN")
+Rel(iot, coordinator, "Передаёт телеметрию; получает команды", "MQTT, Modbus/адаптеры")
+Rel(coordinator, local_notify, "Отправляет критичные уведомления", "LAN/GSM")
+BiRel(coordinator, central, "Синхронизирует события, метрики, команды и конфигурацию", "AMQP over mTLS; при исправной связи ≤ 10 мин")
+Rel(central, idp, "Аутентифицирует пользователей и получает роли", "OIDC/OAuth 2.1")
+Rel(central, kafka, "Публикует доменные события и метрики", "Kafka Protocol")
+Rel(kafka, analytics, "Доставляет данные для аналитики")
+
+SHOW_LEGEND()
+@enduml

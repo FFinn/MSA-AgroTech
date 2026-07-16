@@ -1,0 +1,70 @@
+@startuml C2_Alternative_Hybrid
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title C2 — Вариант B: модульный edge-агент и центральные сервисы
+LAYOUT_TOP_DOWN()
+
+Person(operator, "Оператор фермы", "Реагирует на инциденты и управляет оборудованием")
+Person(user, "Администратор / аналитик", "Управляет фермами и просматривает аналитику")
+
+System_Boundary(farm, "Агент фермы — одна инсталляция на ферму") {
+    Container(edge_app, "Модульный edge-агент", "Application + embedded web UI", "Модули: Incidents, Device Control, Resources, Metrics, Notification, Synchronization, Local Access; единый процесс")
+    Container(video_worker, "Сервис видеоаналитики с GPU", "Python, GPU runtime", "Принимает видеопотоки, выполняет инференс и публикует результаты распознавания")
+    ContainerQueue(edge_mq, "Локальный RabbitMQ", "RabbitMQ + MQTT plugin", "Обеспечивает обмен сообщениями между устройствами, сервисом видеоаналитики с GPU и edge-агентом; хранит сообщения до их обработки")
+    ContainerDb(edge_db, "Локальная БД", "PostgreSQL + TimescaleDB", "Раздельные схемы модулей, телеметрия, конфигурация, кэш ролей и Outbox/Inbox")
+    ContainerDb(video_store, "Локальное видеохранилище", "MinIO", "Фрагменты событий с ограниченным retention")
+}
+
+System_Boundary(center, "Центральная платформа мониторинга") {
+    Container(api, "API Gateway", "REST/HTTPS", "API для существующих web/mobile клиентов, проверка токенов и rate limiting")
+    Container(registry, "Сервис реестра и конфигурации", "Прикладной сервис", "Фермы, агенты, устройства, версии правил и моделей")
+    Container(ingestion, "Сервис приёма событий", "Прикладной сервис", "Идемпотентно принимает события и статусы")
+    Container(central_metrics, "Сервис метрик и аналитики", "Прикладной сервис", "Потребляет события и строит базовые и пользовательские агрегаты")
+    Container(commands, "Сервис команд", "Прикладной сервис", "Формирует команды фермам и отслеживает статусы")
+    ContainerQueue(central_mq, "Центральный RabbitMQ", "RabbitMQ quorum queues", "Ingress-события и durable command queue каждого агента")
+    ContainerDb(central_db, "Изолированные логические БД сервисов", "PostgreSQL + TimescaleDB", "Отдельные схемы и владельцы для Registry, Ingestion, Metrics и Commands")
+    ContainerDb(central_store, "Объектное хранилище", "MinIO", "Выбранные видеофрагменты и артефакты моделей")
+}
+
+System_Ext(cameras, "Камеры", "RTSP/ONVIF, включая ночной режим")
+System_Ext(iot, "Кормушки, поилки и датчики", "MQTT, Modbus, OPC UA и протоколы производителей")
+System_Ext(local_channel, "Локальные каналы оповещения", "Сирена, табло, GSM/SMS")
+System_Ext(idp, "Сервис идентификации", "OIDC/OAuth 2.1, MFA, RBAC")
+System_Ext(existing_ui, "Существующие web/mobile клиенты", "Веб-портал и мобильное приложение «АгроТех Х»")
+System_Ext(kafka, "Корпоративная Kafka", "Существующая событийная шина")
+System_Ext(dwh, "DWH / Data Lake / BI", "ClickHouse, MinIO, Power BI")
+
+Rel(operator, edge_app, "Работает локально с кэшированными ролями", "HTTPS/LAN")
+Rel(user, existing_ui, "Работает", "HTTPS")
+Rel(existing_ui, api, "Вызывает", "REST/HTTPS")
+Rel(api, idp, "Проверяет токены", "OIDC/OAuth 2.1")
+Rel(api, registry, "Управляет фермами и конфигурацией", "REST")
+Rel(api, central_metrics, "Запрашивает метрики", "REST")
+Rel(api, commands, "Создаёт команды", "REST + Idempotency-Key")
+
+Rel(cameras, video_worker, "Передают видеопотоки", "RTSP/ONVIF")
+Rel(video_worker, edge_mq, "Публикует результаты распознавания", "AMQP")
+Rel(video_worker, video_store, "Сохраняет фрагменты событий", "S3 API")
+Rel(iot, edge_mq, "Публикует MQTT-телеметрию; получает MQTT-команды", "MQTT")
+Rel(iot, edge_app, "Работает через legacy-адаптеры", "Modbus/OPC UA/протокол производителя")
+Rel(edge_app, edge_mq, "Получает результаты распознавания/телеметрию; публикует команды", "AMQP/MQTT")
+Rel(edge_app, edge_db, "Хранит данные модулей и транзакционный Outbox/Inbox", "SQL")
+Rel(edge_app, video_store, "Привязывает фрагменты к инцидентам", "S3 API")
+Rel(edge_app, local_channel, "Оповещает без интернета", "LAN/GSM")
+Rel(edge_app, central_mq, "Публикует события и статусы, store-and-forward", "AMQP 0-9-1 over mTLS")
+Rel(central_mq, edge_app, "Доставляет команды и конфигурацию", "AMQP 0-9-1 over mTLS")
+
+Rel(registry, central_mq, "Публикует версии конфигурации", "AMQP")
+Rel(commands, central_mq, "Публикует команды конкретной ферме", "AMQP")
+Rel(central_mq, ingestion, "Доставляет события и статусы", "AMQP")
+Rel(ingestion, central_db, "Хранит свой Inbox, Outbox и принятые данные", "SQL")
+Rel(registry, central_db, "Хранит свой реестр и версии", "SQL")
+Rel(central_metrics, central_db, "Хранит свои временные ряды и агрегаты", "SQL")
+Rel(commands, central_db, "Хранит свои команды и статусы", "SQL")
+Rel(ingestion, central_store, "Сохраняет выбранные фрагменты", "S3 API")
+Rel(ingestion, kafka, "Публикует события через Outbox", "Kafka Protocol")
+Rel(kafka, central_metrics, "Доставляет принятые события для агрегации", "Kafka Protocol")
+Rel(kafka, dwh, "Передаёт данные", "Kafka Connect/ETL")
+
+SHOW_LEGEND()
+@enduml

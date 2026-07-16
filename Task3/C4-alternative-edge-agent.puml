@@ -1,0 +1,126 @@
+@startuml C4_Alternative_Edge_Agent
+!pragma layout smetana
+title C4 — Вариант B: классы Incident Management модуля edge-агента
+
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+hide empty fields
+
+package "EdgeAgent.SharedKernel" {
+    interface ModuleCommandBus <<port>> {
+        +dispatch(command): Result
+    }
+    interface UnitOfWork <<port>> {
+        +transactional(operation): void
+    }
+}
+
+package "EdgeAgent.Adapters" {
+    class RabbitDetectionAdapter <<inbound adapter>> {
+        +onMessage(message: DetectionMessage): void
+    }
+    class LocalIncidentController <<inbound adapter>> {
+        +list(query): Response
+        +acknowledge(id, key): Response
+    }
+    class LocalNotificationAdapter <<outbound adapter>> {
+        +send(plan: NotificationPlan): DeliveryResult
+    }
+    class LocalNotificationRelay <<background adapter>> {
+        +deliverPending(): void
+    }
+    class CentralSyncAdapter <<outbound adapter>> {
+        +publishPending(): void
+        +receiveCommands(): void
+    }
+}
+
+package "EdgeAgent.Incidents.Application" {
+    class RegisterDetection <<use case>> {
+        +execute(message: DetectionMessage): void
+    }
+    class AcknowledgeIncident <<use case>> {
+        +execute(id: IncidentId, operatorId: UUID): void
+    }
+    class IncidentProjection <<query service>> {
+        +find(query: IncidentQuery): IncidentView[]
+    }
+}
+
+package "EdgeAgent.Incidents.Domain" {
+    class Incident <<aggregate root>> {
+        -id: IncidentId
+        -status: IncidentStatus
+        -severity: Severity
+        +register(detection, ruleSet): Incident
+        +acknowledge(operatorId, at): void
+        +releaseEvents(): DomainEvent[]
+    }
+    class RuleSet <<domain service>> {
+        +evaluate(detection, activeIncident): RuleDecision
+    }
+    interface IncidentStore <<module port>> {
+        +findActive(key): Incident?
+        +get(id): Incident
+        +save(incident): void
+    }
+    class IncidentOpened <<module event>>
+    class IncidentAcknowledged <<module event>>
+}
+
+package "EdgeAgent.Notifications" {
+    class EscalationPolicy <<domain service>> {
+        +createPlan(event): NotificationPlan
+    }
+}
+
+package "EdgeAgent.Synchronization" {
+    interface OutboxStore <<module port>> {
+        +append(event, destination): void
+        +pending(destination, limit): OutboxMessage[]
+        +markDelivered(id): void
+    }
+}
+
+package "EdgeAgent.Infrastructure" {
+    class PostgresIncidentStore <<adapter>>
+    class PostgresOutboxStore <<adapter>>
+    class PostgresUnitOfWork <<adapter>>
+}
+
+RabbitDetectionAdapter --> ModuleCommandBus
+LocalIncidentController --> ModuleCommandBus
+ModuleCommandBus --> RegisterDetection
+ModuleCommandBus --> AcknowledgeIncident
+LocalIncidentController --> IncidentProjection
+RegisterDetection --> RuleSet
+RegisterDetection --> Incident
+RegisterDetection --> IncidentStore
+RegisterDetection --> OutboxStore
+RegisterDetection --> UnitOfWork
+AcknowledgeIncident --> IncidentStore
+AcknowledgeIncident --> OutboxStore
+AcknowledgeIncident --> UnitOfWork
+IncidentProjection --> IncidentStore
+Incident *-- IncidentOpened
+Incident *-- IncidentAcknowledged
+LocalNotificationRelay --> OutboxStore
+LocalNotificationRelay --> EscalationPolicy
+LocalNotificationRelay --> LocalNotificationAdapter
+CentralSyncAdapter --> OutboxStore
+PostgresIncidentStore ..|> IncidentStore
+PostgresOutboxStore ..|> OutboxStore
+PostgresUnitOfWork ..|> UnitOfWork
+
+note right of RegisterDetection
+  IncidentStore и OutboxStore фиксируются
+  одной транзакцией UnitOfWork.
+  Outbox содержит отдельные назначения
+  для локального уведомления и центра.
+end note
+
+note bottom of IncidentStore
+  Модуль владеет своей схемой.
+  Другие модули не читают её таблицы напрямую.
+end note
+@enduml

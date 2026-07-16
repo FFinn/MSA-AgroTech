@@ -1,0 +1,50 @@
+@startuml C3_Primary_Incident_Service
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title C3 — Вариант A: компоненты сервиса инцидентов
+LAYOUT_TOP_DOWN()
+
+Person(operator, "Оператор фермы", "Подтверждает и закрывает инциденты")
+
+Container_Boundary(incident_service, "Сервис инцидентов") {
+    Component(detection_consumer, "Detection Event Consumer", "AMQP inbound adapter", "Валидирует схему, дедуплицирует и передаёт detection в application layer")
+    Component(incident_api, "Incident API", "REST inbound adapter", "Возвращает инциденты и принимает acknowledge/close")
+    Component(register_handler, "Register Detection Handler", "Application component", "Оркестрирует регистрацию detection и применение правил")
+    Component(lifecycle_handler, "Incident Lifecycle Handler", "Application component", "Выполняет подтверждение, эскалацию и закрытие")
+    Component(rules, "Incident Rules Engine", "Domain component", "Определяет тип, критичность, дедупликацию и необходимость оповещения")
+    Component(incident_domain, "Incident Aggregate", "Domain model", "Защищает инварианты жизненного цикла")
+    Component(notification_policy, "Notification Policy", "Domain service", "Выбирает канал и политику эскалации по критичности")
+    Component(incident_repo, "Incident Repository", "Persistence port", "Сохраняет и загружает агрегаты")
+    Component(outbox, "Outbox Writer", "Persistence component", "В той же транзакции сохраняет события для уведомления и синхронизации")
+    Component(outbox_relay, "Outbox Relay", "Scheduled/background component", "Публикует события и обрабатывает publisher confirms")
+}
+
+Container_Ext(edge_mq, "Локальный RabbitMQ", "AMQP", "Результаты инференса и доменные события")
+Container_Ext(edge_ui, "Локальный интерфейс", "Web application", "Рабочее место оператора")
+ContainerDb_Ext(edge_db, "Схема Incident Management", "PostgreSQL", "Инциденты, Inbox и Outbox")
+Container_Ext(notification_service, "Сервис локальных уведомлений", "Прикладной сервис", "LAN/GSM/siren delivery")
+Container_Ext(sync_service, "Сервис синхронизации", "Прикладной сервис", "Передача событий в центр")
+
+Rel(edge_mq, detection_consumer, "DetectionReceived", "AMQP")
+Rel(detection_consumer, register_handler, "Передаёт команду")
+Rel(register_handler, rules, "Оценивает detection")
+Rel(register_handler, incident_domain, "Создаёт/обновляет")
+Rel(register_handler, notification_policy, "Определяет оповещение")
+Rel(register_handler, incident_repo, "Сохраняет")
+Rel(register_handler, outbox, "Сохраняет события в одной транзакции")
+Rel(operator, edge_ui, "Работает", "HTTPS/LAN")
+Rel(edge_ui, incident_api, "Читает/подтверждает", "REST")
+Rel(incident_api, lifecycle_handler, "Передаёт команду")
+Rel(lifecycle_handler, incident_domain, "Изменяет состояние")
+Rel(lifecycle_handler, incident_repo, "Читает/сохраняет")
+Rel(lifecycle_handler, outbox, "Сохраняет события")
+Rel(incident_repo, edge_db, "SQL")
+Rel(outbox, edge_db, "SQL")
+Rel(outbox_relay, edge_db, "Читает pending events", "SQL")
+Rel(outbox_relay, edge_mq, "Публикует IncidentOpened/Acknowledged", "AMQP + publisher confirms")
+Rel(edge_mq, notification_service, "IncidentNotificationRequested", "AMQP")
+Rel(edge_mq, sync_service, "Incident lifecycle events", "AMQP")
+
+SHOW_LEGEND()
+@enduml
+
